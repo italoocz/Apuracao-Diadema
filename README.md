@@ -2,7 +2,9 @@
 
 Programa Python para calcular a média de `QT_VOTOS_NOMINAIS_VALIDOS`, as médias
 por `SG_PARTIDO` e por `DS_CARGO`, e comparar o tempo de execução com processos
-e com threads.
+e com threads. A versão com processos usa `multiprocessing.Process` e
+`multiprocessing.Queue`; a versão com threads usa `threading.Thread`. Ambas
+iniciam workers com `start()`, recolhem os resultados e aguardam com `join()`.
 
 ## Executar
 

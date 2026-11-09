@@ -11,8 +11,9 @@ import argparse
 import csv
 import multiprocessing as mp
 import os
+import queue as thread_queue
+import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -95,22 +96,69 @@ def process_range(task: tuple[str, int, int, str | None]) -> Totals:
     return result
 
 
-def run_processes(tasks: list[tuple[str, int, int, str | None]], workers: int) -> Totals:
-    with mp.Pool(processes=workers) as pool:
-        pieces = pool.map(process_range, tasks)
+def process_worker(task: tuple[str, int, int, str | None], output_queue) -> None:
+    """Worker de processo; envia resultado ou erro pela Queue do multiprocessing."""
+    try:
+        output_queue.put((True, process_range(task)))
+    except Exception as exc:
+        output_queue.put((False, f"{type(exc).__name__}: {exc}"))
+
+
+def thread_worker(task: tuple[str, int, int, str | None], output_queue) -> None:
+    """Worker de thread; envia resultado ou erro pela Queue de threads."""
+    try:
+        output_queue.put((True, process_range(task)))
+    except Exception as exc:
+        output_queue.put((False, f"{type(exc).__name__}: {exc}"))
+
+
+def combine_results(queue, expected: int) -> Totals:
+    pieces = []
+    errors = []
+    for _ in range(expected):
+        succeeded, value = queue.get()
+        if succeeded:
+            pieces.append(value)
+        else:
+            errors.append(value)
+    if errors:
+        raise RuntimeError("Falha(s) no processamento: " + "; ".join(errors))
     total = Totals()
     for piece in pieces:
         total.merge(piece)
     return total
 
 
-def run_threads(tasks: list[tuple[str, int, int, str | None]], workers: int) -> Totals:
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        pieces = list(pool.map(process_range, tasks))
-    total = Totals()
-    for piece in pieces:
-        total.merge(piece)
-    return total
+def run_processes(tasks: list[tuple[str, int, int, str | None]]) -> Totals:
+    """Cria processos explicitamente, usando start(), Queue e join()."""
+    output_queue = mp.Queue()
+    processes = [mp.Process(target=process_worker, args=(task, output_queue))
+                 for task in tasks]
+    try:
+        for process in processes:
+            process.start()
+        return combine_results(output_queue, len(processes))
+    finally:
+        for process in processes:
+            if process.pid is not None:
+                process.join()
+        output_queue.close()
+        output_queue.join_thread()
+
+
+def run_threads(tasks: list[tuple[str, int, int, str | None]]) -> Totals:
+    """Cria threads explicitamente, usando start(), Queue e join()."""
+    output_queue = thread_queue.Queue()
+    threads = [threading.Thread(target=thread_worker, args=(task, output_queue))
+               for task in tasks]
+    try:
+        for thread in threads:
+            thread.start()
+        return combine_results(output_queue, len(threads))
+    finally:
+        for thread in threads:
+            if thread.ident is not None:
+                thread.join()
 
 
 def average_groups(groups: dict[str, list[int]]) -> list[tuple[str, float]]:
@@ -154,10 +202,10 @@ def main() -> None:
         parser.error("o ficheiro está vazio")
 
     started = time.perf_counter()
-    proc_result = run_processes(tasks, args.workers)
+    proc_result = run_processes(tasks)
     proc_seconds = time.perf_counter() - started
     started = time.perf_counter()
-    thread_result = run_threads(tasks, args.workers)
+    thread_result = run_threads(tasks)
     thread_seconds = time.perf_counter() - started
 
     print_result("MULTIPROCESSING", proc_result, proc_seconds, municipality)
