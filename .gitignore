@@ -1,0 +1,4 @@
+__pycache__/
+*.py[cod]
+votacao_candidato_munzona_2026_SP.csv
+*.csv
